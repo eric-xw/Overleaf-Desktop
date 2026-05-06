@@ -8,7 +8,7 @@ Built with SwiftUI. No Electron, no embedded browser — just a thin native shel
 
 Overleaf has no official desktop client. The web app is great, but if you want to:
 
-- Edit in VS Code / Vim / TeXShop / Cursor with your own extensions and keybindings
+- Edit in Cursor / Claude Code / VS Code / Vim / TeXShop with your own extensions and keybindings
 - Have offline access to your `.tex` source
 - Use your own version control workflow alongside Overleaf
 - Compile locally with `latexmk`
