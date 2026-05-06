@@ -17,17 +17,28 @@ struct GitStatus {
     let ahead: Int
     let behind: Int
     let branch: String
+    let inConflict: Bool
+}
+
+enum PullOutcome {
+    case upToDate
+    case fastForward(String)
+    case rebased(String)
+    case conflict(files: [String])
 }
 
 enum GitError: LocalizedError {
     case noToken
     case commandFailed(String)
     case invalidPath
+    case stillConflicted(files: [String])
     var errorDescription: String? {
         switch self {
         case .noToken: return "No Overleaf Git token saved. Open Settings to add one."
         case .commandFailed(let msg): return msg
         case .invalidPath: return "Invalid local path."
+        case .stillConflicted(let files):
+            return "These files still have unresolved conflict markers:\n  " + files.joined(separator: "\n  ")
         }
     }
 }
@@ -102,11 +113,26 @@ enum GitService {
         return target
     }
 
-    static func pull(at path: URL) throws -> String {
+    /// Pulls with rebase + autostash. Returns a structured outcome including whether
+    /// a conflict occurred so the UI can route to the resolution sheet.
+    static func pull(at path: URL) throws -> PullOutcome {
         guard let token = KeychainService.loadToken() else { throw GitError.noToken }
         let result = run(["pull", "--rebase", "--autostash"], cwd: path, withToken: token)
-        if !result.ok { throw GitError.commandFailed("git pull failed:\n\(result.combined)") }
-        return result.combined
+        if result.ok {
+            let combined = result.combined
+            if combined.contains("Already up to date") || combined.contains("Already up-to-date") {
+                return .upToDate
+            }
+            if combined.lowercased().contains("fast-forward") {
+                return .fastForward(combined)
+            }
+            return .rebased(combined)
+        }
+        // Failed — check whether we landed in a conflict state.
+        if isInConflict(at: path) {
+            return .conflict(files: conflictedFiles(at: path))
+        }
+        throw GitError.commandFailed("git pull failed:\n\(result.combined)")
     }
 
     static func push(at path: URL) throws -> String {
@@ -116,24 +142,25 @@ enum GitService {
         return result.combined
     }
 
-    static func commitAll(at path: URL, message: String) throws -> String {
+    /// Stages everything, commits if there's anything to commit, and returns whether a commit was made.
+    static func commitAll(at path: URL, message: String) throws -> Bool {
         let addResult = run(["add", "-A"], cwd: path, withToken: nil)
         if !addResult.ok { throw GitError.commandFailed("git add failed:\n\(addResult.combined)") }
 
         let statusResult = run(["status", "--porcelain"], cwd: path, withToken: nil)
         if statusResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Nothing to commit."
+            return false
         }
 
         let commitResult = run(["commit", "-m", message], cwd: path, withToken: nil)
         if !commitResult.ok { throw GitError.commandFailed("git commit failed:\n\(commitResult.combined)") }
-        return commitResult.combined
+        return true
     }
 
     static func status(at path: URL) -> GitStatus {
         let isRepoResult = run(["rev-parse", "--is-inside-work-tree"], cwd: path, withToken: nil)
         guard isRepoResult.ok else {
-            return GitStatus(isRepo: false, dirty: false, ahead: 0, behind: 0, branch: "")
+            return GitStatus(isRepo: false, dirty: false, ahead: 0, behind: 0, branch: "", inConflict: false)
         }
 
         let branchResult = run(["rev-parse", "--abbrev-ref", "HEAD"], cwd: path, withToken: nil)
@@ -152,6 +179,81 @@ enum GitService {
                 behind = Int(parts[1]) ?? 0
             }
         }
-        return GitStatus(isRepo: true, dirty: dirty, ahead: ahead, behind: behind, branch: branch)
+        return GitStatus(isRepo: true, dirty: dirty, ahead: ahead, behind: behind, branch: branch, inConflict: isInConflict(at: path))
+    }
+
+    // MARK: - Conflict handling
+
+    static func isInConflict(at path: URL) -> Bool {
+        let gitDir = path.appendingPathComponent(".git", isDirectory: true)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path) { return true }
+        if fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-apply").path) { return true }
+        if fm.fileExists(atPath: gitDir.appendingPathComponent("MERGE_HEAD").path) { return true }
+        // Also: any unmerged paths reported by git
+        let result = run(["diff", "--name-only", "--diff-filter=U"], cwd: path, withToken: nil)
+        return result.ok && !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func conflictedFiles(at path: URL) -> [String] {
+        let result = run(["diff", "--name-only", "--diff-filter=U"], cwd: path, withToken: nil)
+        guard result.ok else { return [] }
+        return result.stdout
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Continue an in-progress rebase. Throws if files still have unresolved conflicts.
+    static func rebaseContinue(at path: URL) throws -> String {
+        guard let token = KeychainService.loadToken() else { throw GitError.noToken }
+        // Stage everything first so the user doesn't have to remember.
+        let addResult = run(["add", "-A"], cwd: path, withToken: nil)
+        if !addResult.ok { throw GitError.commandFailed("git add failed:\n\(addResult.combined)") }
+
+        let unresolved = conflictedFiles(at: path)
+        if !unresolved.isEmpty {
+            throw GitError.stillConflicted(files: unresolved)
+        }
+
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_EDITOR"] = "true" // accept the default commit message non-interactively
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["rebase", "--continue"]
+        process.currentDirectoryURL = path
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_ASKPASS"] = ""
+        _ = token // unused for the continue itself
+        process.environment = env
+        let outPipe = Pipe(), errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do { try process.run() } catch {
+            throw GitError.commandFailed("git rebase --continue launch failed: \(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 {
+            // Could still be in conflict if `git add -A` swept in something that re-conflicted (rare)
+            if isInConflict(at: path) {
+                throw GitError.stillConflicted(files: conflictedFiles(at: path))
+            }
+            throw GitError.commandFailed("git rebase --continue failed:\n\(stdout)\n\(stderr)")
+        }
+        return stdout + "\n" + stderr
+    }
+
+    /// Abort an in-progress rebase or merge, restoring the pre-pull working tree.
+    static func rebaseAbort(at path: URL) throws -> String {
+        let gitDir = path.appendingPathComponent(".git", isDirectory: true)
+        let fm = FileManager.default
+        let isRebase = fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path)
+            || fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-apply").path)
+        let args = isRebase ? ["rebase", "--abort"] : ["merge", "--abort"]
+        let result = run(args, cwd: path, withToken: nil)
+        if !result.ok { throw GitError.commandFailed("git \(args.joined(separator: " ")) failed:\n\(result.combined)") }
+        return result.combined
     }
 }

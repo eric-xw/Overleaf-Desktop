@@ -3,15 +3,18 @@ import AppKit
 
 struct ProjectsView: View {
     @EnvironmentObject var store: ProjectStore
+    @EnvironmentObject var sync: AutoSyncManager
     @Binding var showAdd: Bool
     @Binding var showSettings: Bool
+    @Binding var conflictProject: Project?
+
     @State private var statuses: [UUID: GitStatus] = [:]
-    @State private var busy: Set<UUID> = []
     @State private var alertMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
+            globalStatusBanner
             Divider()
             if store.projects.isEmpty {
                 emptyState
@@ -21,10 +24,10 @@ struct ProjectsView: View {
                         ProjectRow(
                             project: project,
                             status: statuses[project.id],
-                            isBusy: busy.contains(project.id),
-                            onPull: { perform(project, action: .pull) },
-                            onPush: { perform(project, action: .push) },
-                            onCommitAndPush: { perform(project, action: .commitAndPush) },
+                            syncState: sync.states[project.id] ?? SyncState(),
+                            onPull: { Task { await sync.pull(project); await refreshStatus(project) } },
+                            onPush: { Task { await sync.push(project); await refreshStatus(project) } },
+                            onOpenConflict: { conflictProject = project },
                             onOpenFolder: { openInFinder(project) },
                             onOpenEditor: { openInEditor(project) },
                             onOpenWeb: { openWeb(project) },
@@ -37,6 +40,9 @@ struct ProjectsView: View {
         }
         .task {
             await refreshAllStatuses()
+            for project in store.projects {
+                sync.refreshConflictState(project)
+            }
         }
         .alert("Git Error", isPresented: Binding(
             get: { alertMessage != nil },
@@ -45,6 +51,10 @@ struct ProjectsView: View {
             Button("OK", role: .cancel) { alertMessage = nil }
         } message: {
             Text(alertMessage ?? "")
+        }
+        .onChange(of: sync.states) { _, _ in
+            // When sync state changes, refresh git status to reflect ahead/behind/dirty.
+            Task { await refreshAllStatuses() }
         }
     }
 
@@ -72,6 +82,31 @@ struct ProjectsView: View {
         .padding(12)
     }
 
+    @ViewBuilder
+    private var globalStatusBanner: some View {
+        if store.autoPullOnInterval || store.autoPushOnSave {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.secondary)
+                Group {
+                    if store.autoPullOnInterval && store.autoPushOnSave {
+                        Text("Auto-sync on. Pulls every \(Int(store.autoPullIntervalSeconds))s; pushes ~3s after each save.")
+                    } else if store.autoPullOnInterval {
+                        Text("Auto-pull on. Pulling every \(Int(store.autoPullIntervalSeconds))s.")
+                    } else {
+                        Text("Auto-push on. Pushing ~3s after each save.")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.06))
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "doc.text")
@@ -93,36 +128,6 @@ struct ProjectsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private enum Action { case pull, push, commitAndPush }
-
-    private func perform(_ project: Project, action: Action) {
-        busy.insert(project.id)
-        Task.detached(priority: .userInitiated) {
-            do {
-                switch action {
-                case .pull:
-                    _ = try GitService.pull(at: project.localURL)
-                case .push:
-                    _ = try GitService.push(at: project.localURL)
-                case .commitAndPush:
-                    _ = try GitService.commitAll(at: project.localURL, message: "Update from Overleaf Desktop")
-                    _ = try GitService.push(at: project.localURL)
-                }
-                await MainActor.run {
-                    store.touchSync(project)
-                }
-            } catch {
-                await MainActor.run {
-                    alertMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
-            }
-            await MainActor.run {
-                _ = busy.remove(project.id)
-            }
-            await refreshStatus(project)
-        }
-    }
-
     private func refreshAllStatuses() async {
         for project in store.projects {
             await refreshStatus(project)
@@ -141,20 +146,15 @@ struct ProjectsView: View {
     }
 
     private func openInEditor(_ project: Project) {
-        // Try to open the main .tex (or the folder) in the user's default editor.
         let fm = FileManager.default
         if let contents = try? fm.contentsOfDirectory(atPath: project.localPath) {
             let candidates = ["main.tex", "Main.tex", "manuscript.tex"]
-            for name in candidates {
-                if contents.contains(name) {
-                    let fileURL = project.localURL.appendingPathComponent(name)
-                    NSWorkspace.shared.open(fileURL)
-                    return
-                }
+            for name in candidates where contents.contains(name) {
+                NSWorkspace.shared.open(project.localURL.appendingPathComponent(name))
+                return
             }
             if let firstTex = contents.first(where: { $0.hasSuffix(".tex") }) {
-                let fileURL = project.localURL.appendingPathComponent(firstTex)
-                NSWorkspace.shared.open(fileURL)
+                NSWorkspace.shared.open(project.localURL.appendingPathComponent(firstTex))
                 return
             }
         }
@@ -184,10 +184,10 @@ struct ProjectsView: View {
 struct ProjectRow: View {
     let project: Project
     let status: GitStatus?
-    let isBusy: Bool
+    let syncState: SyncState
     let onPull: () -> Void
     let onPush: () -> Void
-    let onCommitAndPush: () -> Void
+    let onOpenConflict: () -> Void
     let onOpenFolder: () -> Void
     let onOpenEditor: () -> Void
     let onOpenWeb: () -> Void
@@ -197,21 +197,21 @@ struct ProjectRow: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(project.name)
-                        .font(.headline)
+                    Text(project.name).font(.headline)
                     statusBadge
+                    if syncState.inConflict {
+                        conflictBadge
+                    }
                 }
                 Text(project.localPath)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(lastSyncText)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                bottomLine
             }
             Spacer()
-            if isBusy {
+            if syncState.busy {
                 ProgressView().controlSize(.small)
             }
             actionMenu
@@ -232,12 +232,8 @@ struct ProjectRow: View {
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(.green)
                     }
-                    if s.ahead > 0 {
-                        Text("↑\(s.ahead)").foregroundStyle(.blue)
-                    }
-                    if s.behind > 0 {
-                        Text("↓\(s.behind)").foregroundStyle(.purple)
-                    }
+                    if s.ahead > 0 { Text("↑\(s.ahead)").foregroundStyle(.blue) }
+                    if s.behind > 0 { Text("↓\(s.behind)").foregroundStyle(.purple) }
                 }
                 .font(.caption)
             } else {
@@ -246,11 +242,42 @@ struct ProjectRow: View {
         }
     }
 
-    private var lastSyncText: String {
-        guard let date = project.lastSync else { return "Not synced yet" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return "Last sync " + formatter.localizedString(for: date, relativeTo: Date())
+    private var conflictBadge: some View {
+        Button(action: onOpenConflict) {
+            Label("conflict", systemImage: "exclamationmark.triangle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.bold())
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.orange)
+        .controlSize(.mini)
+    }
+
+    private var bottomLine: some View {
+        HStack(spacing: 8) {
+            Text(lastEventText)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            if let err = syncState.lastError, !syncState.inConflict {
+                Text("• \(err)")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+    }
+
+    private var lastEventText: String {
+        if let event = syncState.lastEvent, let date = syncState.lastEventAt {
+            let f = RelativeDateTimeFormatter(); f.unitsStyle = .short
+            return "\(event) \(f.localizedString(for: date, relativeTo: Date()))"
+        }
+        if let date = project.lastSync {
+            let f = RelativeDateTimeFormatter(); f.unitsStyle = .short
+            return "Last sync " + f.localizedString(for: date, relativeTo: Date())
+        }
+        return "Not synced yet"
     }
 
     private var actionMenu: some View {
@@ -258,17 +285,21 @@ struct ProjectRow: View {
             Button(action: onPull) {
                 Label("Pull", systemImage: "arrow.down")
             }
-            .disabled(isBusy)
-            Button(action: onCommitAndPush) {
+            .disabled(syncState.busy || syncState.inConflict)
+
+            Button(action: onPush) {
                 Label("Push", systemImage: "arrow.up")
             }
-            .disabled(isBusy)
+            .disabled(syncState.busy || syncState.inConflict)
+
             Menu {
                 Button("Open Folder", action: onOpenFolder)
                 Button("Open Main .tex", action: onOpenEditor)
                 Button("Open in Browser", action: onOpenWeb)
-                Divider()
-                Button("Push (no commit)", action: onPush)
+                if syncState.inConflict {
+                    Divider()
+                    Button("Resolve Conflict…", action: onOpenConflict)
+                }
                 Divider()
                 Button("Remove…", role: .destructive, action: onRemove)
             } label: {

@@ -40,8 +40,35 @@ struct SettingsView: View {
             }
 
             GroupBox("Sync") {
-                Toggle("Pull all projects automatically on launch", isOn: $store.autoPullOnLaunch)
-                    .padding(8)
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Pull all projects on launch", isOn: $store.autoPullOnLaunch)
+
+                    Toggle("Pull automatically in the background", isOn: $store.autoPullOnInterval)
+
+                    if store.autoPullOnInterval {
+                        HStack {
+                            Text("Every")
+                                .font(.callout)
+                            Stepper(value: $store.autoPullIntervalSeconds, in: 10...600, step: 5) {
+                                Text("\(Int(store.autoPullIntervalSeconds)) seconds")
+                                    .font(.callout)
+                                    .frame(minWidth: 110, alignment: .leading)
+                            }
+                            Spacer()
+                        }
+                        .padding(.leading, 22)
+                    }
+
+                    Toggle("Push automatically a few seconds after each save", isOn: $store.autoPushOnSave)
+
+                    if store.autoPushOnSave || store.autoPullOnInterval {
+                        Text("With both toggles on, your local edits and your coauthors' web edits stay in sync within ~30 seconds. Conflicts will appear inline on each project — open the resolve sheet from the orange badge.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
+                }
+                .padding(8)
             }
 
             Spacer()
@@ -53,7 +80,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 520, height: 360)
+        .frame(width: 540, height: 460)
     }
 
     private func save() {

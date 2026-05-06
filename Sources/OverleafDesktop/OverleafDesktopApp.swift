@@ -2,13 +2,21 @@ import SwiftUI
 
 @main
 struct OverleafDesktopApp: App {
-    @StateObject private var store = ProjectStore()
+    @StateObject private var store: ProjectStore
+    @StateObject private var sync: AutoSyncManager
+
+    init() {
+        let s = ProjectStore()
+        _store = StateObject(wrappedValue: s)
+        _sync = StateObject(wrappedValue: AutoSyncManager(store: s))
+    }
 
     var body: some Scene {
         WindowGroup("Overleaf Desktop") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 720, minHeight: 460)
+                .environmentObject(sync)
+                .frame(minWidth: 760, minHeight: 480)
         }
         .windowResizability(.contentSize)
         .commands {

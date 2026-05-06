@@ -4,8 +4,21 @@ import Combine
 @MainActor
 final class ProjectStore: ObservableObject {
     @Published private(set) var projects: [Project] = []
+
     @Published var autoPullOnLaunch: Bool {
         didSet { UserDefaults.standard.set(autoPullOnLaunch, forKey: "autoPullOnLaunch") }
+    }
+
+    @Published var autoPullOnInterval: Bool {
+        didSet { UserDefaults.standard.set(autoPullOnInterval, forKey: "autoPullOnInterval") }
+    }
+
+    @Published var autoPullIntervalSeconds: Double {
+        didSet { UserDefaults.standard.set(autoPullIntervalSeconds, forKey: "autoPullIntervalSeconds") }
+    }
+
+    @Published var autoPushOnSave: Bool {
+        didSet { UserDefaults.standard.set(autoPushOnSave, forKey: "autoPushOnSave") }
     }
 
     private let storeURL: URL
@@ -15,7 +28,13 @@ final class ProjectStore: ObservableObject {
         let dir = support.appendingPathComponent("OverleafDesktop", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.storeURL = dir.appendingPathComponent("projects.json")
-        self.autoPullOnLaunch = UserDefaults.standard.object(forKey: "autoPullOnLaunch") as? Bool ?? false
+
+        let defaults = UserDefaults.standard
+        self.autoPullOnLaunch = defaults.object(forKey: "autoPullOnLaunch") as? Bool ?? false
+        self.autoPullOnInterval = defaults.object(forKey: "autoPullOnInterval") as? Bool ?? false
+        self.autoPullIntervalSeconds = (defaults.object(forKey: "autoPullIntervalSeconds") as? Double) ?? 30.0
+        self.autoPushOnSave = defaults.object(forKey: "autoPushOnSave") as? Bool ?? false
+
         load()
     }
 
