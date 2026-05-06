@@ -31,6 +31,8 @@ struct ProjectsView: View {
                             onOpenFolder: { openInFinder(project) },
                             onOpenEditor: { openInEditor(project) },
                             onOpenWeb: { openWeb(project) },
+                            onRecheck: { Task { await sync.reconcileConflictState(project); await refreshStatus(project) } },
+                            onForceClear: { sync.clearConflict(project) },
                             onRemove: { remove(project) }
                         )
                     }
@@ -191,6 +193,8 @@ struct ProjectRow: View {
     let onOpenFolder: () -> Void
     let onOpenEditor: () -> Void
     let onOpenWeb: () -> Void
+    let onRecheck: () -> Void
+    let onForceClear: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
@@ -296,9 +300,11 @@ struct ProjectRow: View {
                 Button("Open Folder", action: onOpenFolder)
                 Button("Open Main .tex", action: onOpenEditor)
                 Button("Open in Browser", action: onOpenWeb)
+                Divider()
+                Button("Recheck Status", action: onRecheck)
                 if syncState.inConflict {
-                    Divider()
                     Button("Resolve Conflict…", action: onOpenConflict)
+                    Button("Force Clear Conflict Badge", action: onForceClear)
                 }
                 Divider()
                 Button("Remove…", role: .destructive, action: onRemove)

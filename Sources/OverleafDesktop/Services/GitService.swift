@@ -204,9 +204,25 @@ enum GitService {
             .filter { !$0.isEmpty }
     }
 
-    /// Continue an in-progress rebase. Throws if files still have unresolved conflicts.
+    /// True if `.git/rebase-merge` / `rebase-apply` / `MERGE_HEAD` exists on disk.
+    /// Distinct from `isInConflict` because it ignores stray unmerged-index entries.
+    static func hasInProgressRebaseOrMerge(at path: URL) -> Bool {
+        let gitDir = path.appendingPathComponent(".git", isDirectory: true)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path) { return true }
+        if fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-apply").path) { return true }
+        if fm.fileExists(atPath: gitDir.appendingPathComponent("MERGE_HEAD").path) { return true }
+        return false
+    }
+
+    /// Continue an in-progress rebase. Returns a human-readable result. If no rebase is
+    /// in progress (e.g. the user resolved externally), returns a "nothing to do" message
+    /// rather than failing — the manager reconciles UI state by re-checking the disk.
     static func rebaseContinue(at path: URL) throws -> String {
-        guard let token = KeychainService.loadToken() else { throw GitError.noToken }
+        guard hasInProgressRebaseOrMerge(at: path) else {
+            return "No rebase or merge in progress."
+        }
+
         // Stage everything first so the user doesn't have to remember.
         let addResult = run(["add", "-A"], cwd: path, withToken: nil)
         if !addResult.ok { throw GitError.commandFailed("git add failed:\n\(addResult.combined)") }
@@ -218,13 +234,11 @@ enum GitService {
 
         var env = ProcessInfo.processInfo.environment
         env["GIT_EDITOR"] = "true" // accept the default commit message non-interactively
+        env["GIT_TERMINAL_PROMPT"] = "0"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["rebase", "--continue"]
         process.currentDirectoryURL = path
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        env["GIT_ASKPASS"] = ""
-        _ = token // unused for the continue itself
         process.environment = env
         let outPipe = Pipe(), errPipe = Pipe()
         process.standardOutput = outPipe
@@ -236,7 +250,10 @@ enum GitService {
         let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         if process.terminationStatus != 0 {
-            // Could still be in conflict if `git add -A` swept in something that re-conflicted (rare)
+            // If the metadata is gone now, the rebase actually finished — treat as success.
+            if !hasInProgressRebaseOrMerge(at: path) {
+                return stdout + "\n" + stderr
+            }
             if isInConflict(at: path) {
                 throw GitError.stillConflicted(files: conflictedFiles(at: path))
             }
@@ -245,8 +262,11 @@ enum GitService {
         return stdout + "\n" + stderr
     }
 
-    /// Abort an in-progress rebase or merge, restoring the pre-pull working tree.
+    /// Abort an in-progress rebase or merge. If nothing's in progress, returns a no-op message.
     static func rebaseAbort(at path: URL) throws -> String {
+        guard hasInProgressRebaseOrMerge(at: path) else {
+            return "Nothing to abort."
+        }
         let gitDir = path.appendingPathComponent(".git", isDirectory: true)
         let fm = FileManager.default
         let isRebase = fm.fileExists(atPath: gitDir.appendingPathComponent("rebase-merge").path)

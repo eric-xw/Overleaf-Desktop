@@ -109,54 +109,104 @@ final class AutoSyncManager: ObservableObject {
         guard acquireLock(project) else { return }
         defer { releaseLock(project) }
 
+        var caughtError: GitError?
         do {
             _ = try await runDetached { try GitService.rebaseContinue(at: project.localURL) }
-            // Refresh conflict state.
-            let stillConflict = await runDetached { GitService.isInConflict(at: project.localURL) }
-            updateState(project) {
-                $0.inConflict = stillConflict
-                $0.conflictedFiles = stillConflict ? GitService.conflictedFiles(at: project.localURL) : []
-                $0.lastError = nil
-            }
-            if !stillConflict {
+        } catch let error as GitError {
+            caughtError = error
+        } catch {
+            caughtError = .commandFailed(error.localizedDescription)
+        }
+
+        // ALWAYS reconcile state from disk after the call, regardless of how it returned.
+        // This handles the case where the user resolved externally and the on-disk state
+        // is already clean even though our in-memory flag was stale.
+        await reconcileConflictState(project)
+        let cleared = !(states[project.id]?.inConflict ?? false)
+
+        switch caughtError {
+        case .none:
+            if cleared {
                 setEvent(project, "Conflict resolved")
                 store?.touchSync(project)
+                updateState(project) { $0.lastError = nil }
             }
-        } catch let error as GitError {
-            if case .stillConflicted(let files) = error {
-                setConflict(project, files: files, error: error.errorDescription)
+        case .some(.stillConflicted(let files)):
+            setConflict(project, files: files, error: caughtError?.errorDescription)
+        case .some(let error):
+            // If the disk says we're clean, this was a "no rebase in progress" or
+            // similar benign error — treat as resolved.
+            if cleared {
+                setEvent(project, "Conflict resolved")
+                store?.touchSync(project)
+                updateState(project) { $0.lastError = nil }
             } else {
                 updateState(project) { $0.lastError = error.errorDescription }
             }
-        } catch {
-            updateState(project) { $0.lastError = error.localizedDescription }
         }
     }
 
     func abortRebase(_ project: Project) async {
         guard acquireLock(project) else { return }
         defer { releaseLock(project) }
+
+        var caughtError: GitError?
         do {
             _ = try await runDetached { try GitService.rebaseAbort(at: project.localURL) }
+        } catch let error as GitError {
+            caughtError = error
+        } catch {
+            caughtError = .commandFailed(error.localizedDescription)
+        }
+
+        await reconcileConflictState(project)
+        let cleared = !(states[project.id]?.inConflict ?? false)
+
+        if cleared {
             updateState(project) {
-                $0.inConflict = false
-                $0.conflictedFiles = []
                 $0.lastError = nil
                 $0.lastEvent = "Pull aborted; local changes restored"
                 $0.lastEventAt = Date()
             }
-        } catch {
-            updateState(project) { $0.lastError = error.localizedDescription }
+        } else if let err = caughtError {
+            updateState(project) { $0.lastError = err.errorDescription }
         }
     }
 
-    /// Re-check whether a project is currently in conflict (e.g. on startup).
+    /// Re-check whether a project is currently in conflict (e.g. on startup, or after the
+    /// user has likely resolved externally). Synchronous version; safe to call from MainActor
+    /// because git invocations are fast (millisecs).
     func refreshConflictState(_ project: Project) {
         let inConflict = GitService.isInConflict(at: project.localURL)
         let files = inConflict ? GitService.conflictedFiles(at: project.localURL) : []
         updateState(project) {
             $0.inConflict = inConflict
             $0.conflictedFiles = files
+        }
+    }
+
+    /// Async variant that runs the git probe off the main actor.
+    func reconcileConflictState(_ project: Project) async {
+        let inConflict = await runDetached { GitService.isInConflict(at: project.localURL) }
+        let files = inConflict
+            ? await runDetached({ GitService.conflictedFiles(at: project.localURL) })
+            : []
+        updateState(project) {
+            $0.inConflict = inConflict
+            $0.conflictedFiles = files
+        }
+    }
+
+    /// Force-clear the in-memory conflict flag for a project. The escape hatch when the user
+    /// knows the disk is clean but the badge is stuck (e.g. after resolving via the CLI).
+    /// Safe even if disk does still have a conflict — the next pull/push will surface it again.
+    func clearConflict(_ project: Project) {
+        updateState(project) {
+            $0.inConflict = false
+            $0.conflictedFiles = []
+            $0.lastError = nil
+            $0.lastEvent = "Conflict status cleared manually"
+            $0.lastEventAt = Date()
         }
     }
 
