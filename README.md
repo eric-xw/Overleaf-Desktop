@@ -6,14 +6,17 @@ Built with SwiftUI. No Electron, no embedded browser — just a thin native shel
 
 ## Why this exists
 
-Overleaf has no official desktop client. The web app is great, but if you want to:
+Overleaf has no official desktop client. You can `git clone` a project from the Git bridge and edit locally, but the manual Pull / Push grind kills the workflow — you forget to pull, you forget to push, your coauthor's edits collide with yours, and after one bad merge you give up and go back to the web editor.
 
-- Edit in Cursor / Claude Code / VS Code / Vim / TeXShop with your own extensions and keybindings
-- Have offline access to your `.tex` source
-- Use your own version control workflow alongside Overleaf
-- Compile locally with `latexmk`
+The point of this app isn't really the Git wrapper. It's the **near-real-time sync** that makes local editing viable when you're collaborating:
 
-…you have to manually `git clone` each project from the command line. This app puts that workflow behind a Mac-native UI.
+- **Auto-sync, no buttons.** Save your `.tex` and ~3 seconds later it's on overleaf.com. Your coauthor's web edits appear on your disk within ~30 seconds. You stop thinking about syncing.
+- **Conflict UI.** The rare same-line conflict surfaces as an orange badge with a one-click resolution flow, instead of a raw `git rebase` mess.
+- **Edit anywhere.** Cursor, Claude Code, VS Code, Vim, TeXShop — local files mean any editor with any extensions and keybindings, including AI tab-autocomplete that the web editor doesn't have.
+- **Offline editing.** No connection on a flight? Keep editing. Auto-push catches up on reconnect.
+- **Your own tooling on top.** Local `latexmk`, your own grep, your own private git branch alongside Overleaf's history.
+
+A `git clone` + a cron job could replicate the basics. The auto-sync timing, per-project locking, conflict reconciliation, and macOS Keychain integration are what make this feel like a desktop app instead of a fragile shell script.
 
 ## Requirements
 
