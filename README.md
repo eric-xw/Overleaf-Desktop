@@ -213,6 +213,7 @@ overleaf-desktop/
 
 - **No project-list discovery.** Overleaf does not expose a public "list my projects" API, so projects are added one URL at a time. Keep an Overleaf tab open to copy URLs from.
 - **Generic commit messages.** Manual push uses `"Update from Overleaf Desktop"`; auto-push uses `"Auto-sync from Overleaf Desktop"`. If you want per-push messages, edit the relevant action in `AutoSyncManager.swift`.
+- **Embedded git worktrees are skipped.** Claude Code's `.claude/worktrees/...`, git submodules without a `.gitmodules` entry, and any other directory containing a nested `.git` are excluded from `git add -A`, so they're never committed and pushed to Overleaf. The "uncommitted" badge may persist for those untracked dirs — that's expected. Add them to `.gitignore` if you want a clean status.
 - **No local PDF compilation.** Use Overleaf's web compiler, or run `latexmk` locally if you have a TeX install.
 - **Ad-hoc code signing.** The build script signs the app with `codesign --sign -`. Gatekeeper may warn on first launch — right-click → Open to bypass. For distribution outside your own machine, you'll need a Developer ID.
 - **Near-real-time, not real-time.** Auto-sync is ~30 s end-to-end via Git. Overleaf-web's sub-second collaborative editing uses an OT-over-WebSocket protocol that isn't exposed publicly; replicating it is out of scope.

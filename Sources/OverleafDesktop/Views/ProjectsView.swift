@@ -33,6 +33,7 @@ struct ProjectsView: View {
                             onOpenWeb: { openWeb(project) },
                             onRecheck: { Task { await sync.reconcileConflictState(project); await refreshStatus(project) } },
                             onForceClear: { sync.clearConflict(project) },
+                            onClearError: { sync.clearLastError(project) },
                             onRemove: { remove(project) }
                         )
                     }
@@ -195,32 +196,65 @@ struct ProjectRow: View {
     let onOpenWeb: () -> Void
     let onRecheck: () -> Void
     let onForceClear: () -> Void
+    let onClearError: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(project.name).font(.headline)
-                    statusBadge
-                    if syncState.inConflict {
-                        conflictBadge
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(project.name).font(.headline)
+                        statusBadge
+                        if syncState.inConflict {
+                            conflictBadge
+                        }
                     }
+                    Text(project.localPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(lastEventText)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                Text(project.localPath)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                bottomLine
+                Spacer()
+                if syncState.busy {
+                    ProgressView().controlSize(.small)
+                }
+                actionMenu
             }
-            Spacer()
-            if syncState.busy {
-                ProgressView().controlSize(.small)
+            if let err = syncState.lastError, !syncState.inConflict {
+                errorBanner(err)
             }
-            actionMenu
         }
         .padding(.vertical, 6)
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.red)
+                .font(.caption)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+                .lineLimit(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                onClearError()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+        }
+        .padding(8)
+        .background(Color.red.opacity(0.07))
+        .cornerRadius(6)
     }
 
     private var statusBadge: some View {
@@ -255,21 +289,6 @@ struct ProjectRow: View {
         .buttonStyle(.borderedProminent)
         .tint(.orange)
         .controlSize(.mini)
-    }
-
-    private var bottomLine: some View {
-        HStack(spacing: 8) {
-            Text(lastEventText)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            if let err = syncState.lastError, !syncState.inConflict {
-                Text("• \(err)")
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
     }
 
     private var lastEventText: String {

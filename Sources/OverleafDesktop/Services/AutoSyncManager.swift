@@ -76,8 +76,9 @@ final class AutoSyncManager: ObservableObject {
         defer { releaseLock(project) }
 
         do {
+            var didCommit = false
             if autoCommit {
-                let didCommit = try await runDetached {
+                didCommit = try await runDetached {
                     try GitService.commitAll(at: project.localURL,
                                              message: source == .auto ? "Auto-sync from Overleaf Desktop" : "Update from Overleaf Desktop")
                 }
@@ -86,8 +87,18 @@ final class AutoSyncManager: ObservableObject {
                     return
                 }
             }
-            _ = try await runDetached { try GitService.push(at: project.localURL) }
-            setEvent(project, source == .auto ? "Auto-pushed" : "Pushed")
+            let pushOutput = try await runDetached { try GitService.push(at: project.localURL) }
+            let lower = pushOutput.lowercased()
+            let upToDate = lower.contains("everything up-to-date") || lower.contains("everything up to date")
+            let eventText: String
+            if !didCommit && upToDate {
+                eventText = "Already up to date"
+            } else if source == .auto {
+                eventText = "Auto-pushed"
+            } else {
+                eventText = "Pushed"
+            }
+            setEvent(project, eventText)
             store?.touchSync(project)
             updateState(project) { $0.lastError = nil }
         } catch let error as GitError {
@@ -208,6 +219,11 @@ final class AutoSyncManager: ObservableObject {
             $0.lastEvent = "Conflict status cleared manually"
             $0.lastEventAt = Date()
         }
+    }
+
+    /// Dismiss the last-error banner on a project's row.
+    func clearLastError(_ project: Project) {
+        updateState(project) { $0.lastError = nil }
     }
 
     // MARK: - Settings application

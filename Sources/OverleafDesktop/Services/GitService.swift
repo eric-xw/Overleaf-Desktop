@@ -142,19 +142,98 @@ enum GitService {
         return result.combined
     }
 
-    /// Stages everything, commits if there's anything to commit, and returns whether a commit was made.
+    /// Stages everything (excluding embedded git worktrees / nested repos), commits if
+    /// there's anything actually staged, and returns whether a commit was made.
     static func commitAll(at path: URL, message: String) throws -> Bool {
-        let addResult = run(["add", "-A"], cwd: path, withToken: nil)
+        // Build pathspec excludes for embedded git worktrees (e.g. Claude Code's
+        // .claude/worktrees/...). `git add -A` would otherwise treat these as gitlinks
+        // and either commit phantom submodule pointers or leave the index in a state
+        // where the next status check is misleading.
+        let embedded = embeddedGitWorktreePaths(at: path)
+        var addArgs = ["add", "-A"]
+        if !embedded.isEmpty {
+            addArgs.append("--")
+            for relative in embedded {
+                addArgs.append(":(exclude)\(relative)")
+            }
+        }
+        let addResult = run(addArgs, cwd: path, withToken: nil)
         if !addResult.ok { throw GitError.commandFailed("git add failed:\n\(addResult.combined)") }
 
-        let statusResult = run(["status", "--porcelain"], cwd: path, withToken: nil)
-        if statusResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Gate the commit on what's actually STAGED. `git status --porcelain` would also
+        // count untracked files (including the worktrees we just excluded above) and lead
+        // us to attempt empty commits.
+        let stagedResult = run(["diff", "--cached", "--name-only"], cwd: path, withToken: nil)
+        if stagedResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return false
         }
 
         let commitResult = run(["commit", "-m", message], cwd: path, withToken: nil)
         if !commitResult.ok { throw GitError.commandFailed("git commit failed:\n\(commitResult.combined)") }
         return true
+    }
+
+    /// Parse `git status --porcelain` output and report whether any line refers to a path
+    /// outside the given embedded-worktree paths. Used so the dirty/clean badge ignores
+    /// nested-repo noise we would never commit anyway.
+    static func hasMeaningfulChanges(porcelain: String, excluding embedded: [String]) -> Bool {
+        let lines = porcelain
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard !lines.isEmpty else { return false }
+
+        for line in lines {
+            // Format: "XY path" — first 2 chars are status codes, then a space, then path.
+            // We tolerate any amount of leading whitespace before the path.
+            guard line.count > 3 else { continue }
+            let pathStart = line.index(line.startIndex, offsetBy: 3)
+            var pathPart = String(line[pathStart...])
+            // Renames look like "XY old -> new"; only the new name matters for filtering.
+            if let arrow = pathPart.range(of: " -> ") {
+                pathPart = String(pathPart[arrow.upperBound...])
+            }
+            // Strip optional surrounding quotes (git quotes paths with special chars).
+            if pathPart.hasPrefix("\"") && pathPart.hasSuffix("\"") {
+                pathPart = String(pathPart.dropFirst().dropLast())
+            }
+            let isEmbedded = embedded.contains { embeddedPath in
+                pathPart == embeddedPath
+                    || pathPart.hasPrefix(embeddedPath + "/")
+            }
+            if !isEmbedded { return true }
+        }
+        return false
+    }
+
+    /// Returns the relative paths (from `path`) of any embedded git worktrees / nested
+    /// repos under the work tree — i.e. directories whose immediate child is a `.git`
+    /// file or directory. Excludes the project's own root `.git`.
+    static func embeddedGitWorktreePaths(at path: URL) -> [String] {
+        // `find . -mindepth 2 -name .git` lists every nested .git, then we strip the
+        // trailing "/.git" to get the embedded-repo's parent dir.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/find")
+        process.arguments = [".", "-mindepth", "2", "-name", ".git", "-not", "-path", "./.git/*"]
+        process.currentDirectoryURL = path
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do { try process.run() } catch { return [] }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return [] }
+        let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return stdout
+            .split(separator: "\n")
+            .map { String($0) }
+            .compactMap { line -> String? in
+                // line looks like "./.claude/worktrees/foo/.git" — strip leading "./" and trailing "/.git"
+                var s = line
+                if s.hasPrefix("./") { s.removeFirst(2) }
+                guard s.hasSuffix("/.git") else { return nil }
+                s.removeLast("/.git".count)
+                return s.isEmpty ? nil : s
+            }
     }
 
     static func status(at path: URL) -> GitStatus {
@@ -166,8 +245,12 @@ enum GitService {
         let branchResult = run(["rev-parse", "--abbrev-ref", "HEAD"], cwd: path, withToken: nil)
         let branch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // "dirty" should reflect whether there's anything we'd actually commit. Filter out
+        // lines that refer to embedded git worktrees we exclude from `git add -A`, otherwise
+        // a Claude Code worktree leaves the badge stuck on orange forever.
         let porcelain = run(["status", "--porcelain"], cwd: path, withToken: nil)
-        let dirty = !porcelain.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let embedded = embeddedGitWorktreePaths(at: path)
+        let dirty = hasMeaningfulChanges(porcelain: porcelain.stdout, excluding: embedded)
 
         let counts = run(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], cwd: path, withToken: nil)
         var ahead = 0
