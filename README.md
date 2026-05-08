@@ -1,6 +1,12 @@
-# Overleaf Desktop
+<p align="center">
+  <img src="assets/logo.png" alt="Overleaf Desktop" width="160">
+</p>
 
-A native macOS app for syncing [Overleaf](https://www.overleaf.com) projects to your local filesystem via Overleaf's Git bridge. Edit `.tex` files in your editor of choice; sync manually with one-click Pull / Push, or enable near-real-time auto-sync (~30 s end-to-end).
+<h1 align="center">Overleaf Desktop</h1>
+
+<p align="center">
+  A native macOS app for syncing <a href="https://www.overleaf.com">Overleaf</a> projects to your local filesystem via Overleaf's Git bridge. Edit <code>.tex</code> files in your editor of choice; sync manually with one-click Pull / Push, or enable near-real-time auto-sync (~30&nbsp;s end-to-end).
+</p>
 
 Built with SwiftUI. No Electron, no embedded browser — just a thin native shell over `git`.
 

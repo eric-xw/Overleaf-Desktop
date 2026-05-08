@@ -209,3 +209,21 @@ if proc.terminationStatus != 0 {
 }
 
 print("✓ Wrote \(icnsPath.path)")
+
+// Also refresh the standalone PNG copies in assets/ so README / social
+// embeds stay in sync with the icon source.
+let assetsDir = repoRoot.appendingPathComponent("assets", isDirectory: true)
+try? fm.createDirectory(at: assetsDir, withIntermediateDirectories: true)
+let copies: [(String, String)] = [
+    ("icon_512x512@2x.png", "logo.png"),
+    ("icon_256x256.png",    "logo-256.png"),
+]
+for (src, dst) in copies {
+    let srcURL = iconsetDir.appendingPathComponent(src)
+    let dstURL = assetsDir.appendingPathComponent(dst)
+    if fm.fileExists(atPath: dstURL.path) {
+        try? fm.removeItem(at: dstURL)
+    }
+    try fm.copyItem(at: srcURL, to: dstURL)
+    print("  • assets/\(dst) (from \(src))")
+}
