@@ -41,6 +41,13 @@ mkdir -p "$BUNDLE_DIR/Contents/Resources"
 cp "$EXE" "$BUNDLE_DIR/Contents/MacOS/$APP_NAME"
 cp "$SCRIPT_DIR/Sources/OverleafDesktop/Resources/Info.plist" "$BUNDLE_DIR/Contents/Info.plist"
 
+ICON_SRC="$SCRIPT_DIR/Sources/OverleafDesktop/Resources/AppIcon.icns"
+if [[ -f "$ICON_SRC" ]]; then
+    cp "$ICON_SRC" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
+else
+    echo "⚠ AppIcon.icns missing; run: swift tools/generate_icon.swift"
+fi
+
 # Copy any SPM-bundled resources next to the executable so Bundle.module works.
 RESOURCE_BUNDLE="$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle"
 if [[ -d "$RESOURCE_BUNDLE" ]]; then

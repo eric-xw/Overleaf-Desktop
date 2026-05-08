@@ -10,7 +10,7 @@ let package = Package(
         .executableTarget(
             name: "OverleafDesktop",
             path: "Sources/OverleafDesktop",
-            exclude: ["Resources/Info.plist"]
+            exclude: ["Resources/Info.plist", "Resources/AppIcon.icns"]
         )
     ]
 )
