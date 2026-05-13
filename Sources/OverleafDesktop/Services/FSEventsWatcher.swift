@@ -32,15 +32,27 @@ final class FSEventsWatcher {
             copyDescription: nil
         )
 
-        let callback: FSEventStreamCallback = { (_, info, numEvents, eventPaths, _, _) in
+        let callback: FSEventStreamCallback = { (_, info, _, eventPaths, _, _) in
             guard let info = info else { return }
             let watcher = Unmanaged<FSEventsWatcher>.fromOpaque(info).takeUnretainedValue()
-            guard let pathsArray = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] else {
-                watcher.scheduleSettle()
-                return
+
+            // The CFArray that FSEvents hands us, and the CFString path elements
+            // inside it, are only guaranteed valid for the duration of this
+            // callback. Lazy ObjC→Swift bridging via `as? [String]` defers the
+            // per-element bridge until access time — by which point the C string
+            // buffers have already been freed, causing EXC_BAD_ACCESS in
+            // objc_msgSend. We must copy each path into Swift-owned storage
+            // eagerly, inside the callback scope.
+            //
+            // Bug report: https://github.com/eric-xw/Overleaf-Desktop/issues/1
+            let nsArray = unsafeBitCast(eventPaths, to: NSArray.self)
+            let paths: [String] = nsArray.compactMap { elem in
+                guard let nsStr = elem as? NSString else { return nil }
+                return String(nsStr)   // initializer copies bytes into Swift String storage
             }
+
             // Filter out .git/ traffic so that our own commits don't loop back.
-            let interesting = pathsArray.contains { p in
+            let interesting = paths.contains { p in
                 let lower = p.lowercased()
                 return !lower.contains("/.git/") && !lower.hasSuffix("/.git")
             }

@@ -221,7 +221,9 @@ struct ProjectRow: View {
                 }
                 Spacer()
                 if syncState.busy {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
                 }
                 actionMenu
             }
