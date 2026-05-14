@@ -285,6 +285,10 @@ final class AutoSyncManager: ObservableObject {
 
     private func ensureWatcher(for project: Project) {
         if watchers[project.id] != nil { return }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: project.localPath, isDirectory: &isDir),
+              isDir.boolValue else { return }
+
         let id = project.id
         let watcher = FSEventsWatcher(path: project.localPath, debounceSeconds: 3.0) { [weak self] in
             Task { @MainActor [weak self] in
