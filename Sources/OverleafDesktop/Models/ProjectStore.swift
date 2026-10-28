@@ -21,6 +21,13 @@ final class ProjectStore: ObservableObject {
         didSet { UserDefaults.standard.set(autoPushOnSave, forKey: "autoPushOnSave") }
     }
 
+    @Published var menuBarOnly: Bool {
+        didSet {
+            UserDefaults.standard.set(menuBarOnly, forKey: "menuBarOnly")
+            MenuBarMode.apply(menuBarOnly)
+        }
+    }
+
     private let storeURL: URL
 
     init() {
@@ -34,6 +41,7 @@ final class ProjectStore: ObservableObject {
         self.autoPullOnInterval = defaults.object(forKey: "autoPullOnInterval") as? Bool ?? false
         self.autoPullIntervalSeconds = (defaults.object(forKey: "autoPullIntervalSeconds") as? Double) ?? 30.0
         self.autoPushOnSave = defaults.object(forKey: "autoPushOnSave") as? Bool ?? false
+        self.menuBarOnly = defaults.object(forKey: "menuBarOnly") as? Bool ?? false
 
         load()
     }

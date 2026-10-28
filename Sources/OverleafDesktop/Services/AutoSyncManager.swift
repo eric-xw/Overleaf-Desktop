@@ -40,6 +40,17 @@ final class AutoSyncManager: ObservableObject {
         .sink { [weak self] _, _, _ in
             self?.applySettings()
         }
+
+        // Here rather than in a view so it runs exactly once per launch, even when
+        // menu bar mode starts without a window or the window is reopened later.
+        if store.autoPullOnLaunch {
+            Task { [weak self] in
+                guard let self, let projects = await self.currentProjects() else { return }
+                for project in projects {
+                    await self.pull(project, source: .auto)
+                }
+            }
+        }
     }
 
     // MARK: - Public actions

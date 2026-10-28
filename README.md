@@ -58,6 +58,10 @@ Both default to **off**. With both on at 30 s:
 - Local edit → overleaf.com: 3–5 s
 - Coauthor's web edit → your disk: up to 30 s
 
+### Menu bar mode
+
+Tick **Menu bar mode** at the bottom of Settings to hide the Dock icon and put a leaf icon in the menu bar instead, with **Open Overleaf**, **Settings…** and **Quit Overleaf**. Closing the window keeps the app (and auto-sync) running in the background, and later launches start straight into the menu bar with no window. If the icon is hidden (e.g. behind the notch), open the app again from Finder or Spotlight to bring the window back.
+
 ### Conflicts
 
 When a pull hits a rebase conflict, the row gets an orange **conflict** badge and auto-sync pauses for that project. Click the badge → resolution sheet lists conflicted files → **Open** each, edit normally (look for `<<<<<<<` / `=======` / `>>>>>>>` markers), then **Mark Resolved & Continue** or **Abort Pull**.
@@ -139,7 +143,7 @@ Open to PRs:
 - [ ] Per-push commit messages (prompt on manual Push)
 - [ ] Per-project sync overrides (disable auto-sync on noisy projects)
 - [ ] Diff preview before auto-push fires
-- [ ] Menu-bar mode
+- [x] Menu-bar mode
 - [ ] Linux / Windows ports (would need a non-SwiftUI rewrite)
 
 ## Contributing

@@ -74,6 +74,8 @@ struct SettingsView: View {
             Spacer()
 
             HStack {
+                Toggle("Menu bar mode (hide Dock icon)", isOn: $store.menuBarOnly)
+                    .help("Show an icon in the menu bar instead of the Dock. Closing the window keeps auto-sync running; reopen it from the menu bar icon.")
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
